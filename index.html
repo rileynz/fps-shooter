@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FPS Arena</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:'Courier New',monospace;overflow:hidden;user-select:none}
+#wrap{position:relative;width:800px;height:500px}
+canvas{display:block}
+#ui{position:absolute;inset:0;pointer-events:none}
+#crosshair{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:20px;height:20px}
+#crosshair::before,#crosshair::after{content:'';position:absolute;background:#fff8;border-radius:2px}
+#crosshair::before{width:2px;height:20px;left:9px;top:0}
+#crosshair::after{width:20px;height:2px;left:0;top:9px}
+#hud-top{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:flex-start;padding:10px 14px}
+#hud-bot{position:absolute;bottom:0;left:0;right:0;display:flex;justify-content:space-between;align-items:flex-end;padding:10px 14px}
+#health-wrap{display:flex;flex-direction:column;gap:4px}
+#health-label{font-size:10px;color:#ffffff66;letter-spacing:2px}
+#health-bar{width:160px;height:10px;background:#ffffff15;border-radius:3px;overflow:hidden}
+#health-fill{height:100%;background:#44ff88;border-radius:3px;transition:width 0.15s,background 0.3s}
+#ammo{font-size:28px;color:#fff;font-weight:bold;text-align:right;text-shadow:0 0 10px #fff4}
+#ammo-label{font-size:10px;color:#ffffff44;letter-spacing:2px;text-align:right}
+#kills-wrap{font-size:13px;color:#fff;text-align:center}
+#kills-val{font-size:24px;font-weight:bold;color:#ffcc44}
+#minimap{position:absolute;top:10px;right:10px;opacity:0.85}
+#scoreboard{position:absolute;top:50px;left:50%;transform:translateX(-50%);background:#000000cc;border:0.5px solid #333;border-radius:8px;padding:10px 18px;font-size:12px;color:#ccc;min-width:220px;display:none}
+#scoreboard table{width:100%;border-collapse:collapse}
+#scoreboard td{padding:3px 8px}
+#scoreboard tr:first-child td{color:#888;font-size:10px;letter-spacing:1px;border-bottom:0.5px solid #333}
+#kill-feed{position:absolute;top:14px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none}
+.kill-msg{background:#000000aa;border:0.5px solid #ffffff22;border-radius:4px;padding:3px 10px;font-size:11px;color:#fff;letter-spacing:1px;animation:fadeout 3s forwards}
+@keyframes fadeout{0%,60%{opacity:1}100%{opacity:0}}
+#hit-flash{position:absolute;inset:0;background:#ff000000;pointer-events:none;transition:background 0.1s}
+#overlay{position:absolute;inset:0;background:#000000dd;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:10}
+#overlay h1{font-size:30px;letter-spacing:4px;text-transform:uppercase}
+#overlay p{font-size:12px;color:#886699;letter-spacing:2px;text-align:center;line-height:2}
+#overlay button{padding:10px 32px;background:transparent;border:0.5px solid #8855cc;color:#cc99ff;font-family:'Courier New',monospace;font-size:13px;letter-spacing:2px;text-transform:uppercase;border-radius:6px;cursor:pointer}
+#overlay button:hover{background:#8855cc22}
+#respawn-msg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:22px;color:#ff6688;letter-spacing:3px;text-transform:uppercase;display:none;text-align:center}
+#pointer-msg{position:absolute;bottom:50px;left:50%;transform:translateX(-50%);font-size:11px;color:#ffffff55;letter-spacing:2px;text-align:center}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="800" height="500"></canvas>
+  <div id="ui">
+    <div id="hit-flash"></div>
+    <div id="crosshair"></div>
+    <div id="kill-feed"></div>
+    <div id="hud-top">
+      <div id="kills-wrap">
+        <div id="kills-val">0</div>
+        <div style="font-size:10px;color:#ffffff44;letter-spacing:2px">KILLS</div>
+      </div>
+      <div id="room-info" style="font-size:10px;color:#444;letter-spacing:1px;text-align:center"></div>
+      <div id="deaths-wrap" style="text-align:right">
+        <div id="deaths-val" style="font-size:24px;font-weight:bold;color:#ff6688">0</div>
+        <div style="font-size:10px;color:#ffffff44;letter-spacing:2px">DEATHS</div>
+      </div>
+    </div>
+    <canvas id="minimap" width="120" height="120"></canvas>
+    <div id="scoreboard">
+      <table id="score-table"></table>
+    </div>
+    <div id="hud-bot">
+      <div id="health-wrap">
+        <div id="health-label">HEALTH</div>
+        <div id="health-bar"><div id="health-fill" style="width:100%"></div></div>
+      </div>
+      <div>
+        <div id="ammo">∞</div>
+        <div id="ammo-label">AMMO</div>
+      </div>
+    </div>
+    <div id="respawn-msg"></div>
+    <div id="pointer-msg">Click to play · WASD move · Mouse look · Click shoot · Tab scoreboard</div>
+  </div>
+  <div id="overlay">
+    <h1 style="color:#cc99ff">FPS Arena</h1>
+    <p id="ov-msg">Connecting...</p>
+    <button id="ov-btn" style="display:none" onclick="restartGame()">Play Again</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const mm = document.getElementById('minimap');
+const mctx = mm.getContext('2d');
+const W = 800, H = 500;
+const MW = 120, MH = 120;
+const FOV = Math.PI / 3;
+const RAYS = W;
+const HALF_H = H / 2;
+const MAX_DIST = 20;
+
+let socket, myId, mySlot, MAP = null, gameState = null;
+let mouseX = 0, pointerLocked = false;
+let myAngle = 0;
+let shooting = false, shootCooldown = 0;
+let myHp = 100, myAlive = true, myRespawnTimer = 0;
+let myKills = 0, myDeaths = 0;
+let showScoreboard = false;
+let maxKills = 10;
+
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Tab') { e.preventDefault(); showScoreboard = true; updateScoreboard(); document.getElementById('scoreboard').style.display='block'; }
+});
+document.addEventListener('keyup', e => {
+  keys[e.code] = false;
+  if (e.code === 'Tab') { showScoreboard = false; document.getElementById('scoreboard').style.display='none'; }
+});
+
+canvas.addEventListener('click', () => {
+  if (!pointerLocked) canvas.requestPointerLock();
+  else shooting = true;
+});
+
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = document.pointerLockElement === canvas;
+  document.getElementById('pointer-msg').style.display = pointerLocked ? 'none' : 'block';
+});
+
+document.addEventListener('mousemove', e => {
+  if (!pointerLocked) return;
+  myAngle += e.movementX * 0.0022;
+});
+
+document.addEventListener('mousedown', e => { if (e.button === 0 && pointerLocked) shooting = true; });
+document.addEventListener('mouseup', e => { if (e.button === 0) shooting = false; });
+
+function castRay(px, py, angle, map) {
+  const cosA = Math.cos(angle), sinA = Math.sin(angle);
+  let dist = 0, hit = false, side = 0, wallX = 0;
+  let rayX = px, rayY = py;
+  const stepSize = 0.02;
+  for (let i = 0; i < MAX_DIST / stepSize; i++) {
+    rayX += cosA * stepSize; rayY += sinA * stepSize;
+    dist += stepSize;
+    const mx = Math.floor(rayX), my = Math.floor(rayY);
+    if (mx < 0 || my < 0 || mx >= map[0].length || my >= map.length) { hit = true; break; }
+    if (map[my][mx] === 1) {
+      hit = true;
+      const fx = rayX - Math.floor(rayX), fy = rayY - Math.floor(rayY);
+      const prevX = rayX - cosA * stepSize, prevY = rayY - sinA * stepSize;
+      const pfx = prevX - Math.floor(prevX), pfy = prevY - Math.floor(prevY);
+      side = Math.abs(fx - pfx) > Math.abs(fy - pfy) ? 0 : 1;
+      wallX = side === 0 ? fy : fx;
+      break;
+    }
+  }
+  return { dist, side, wallX };
+}
+
+function renderScene(me) {
+  if (!MAP) return;
+  const px = me ? me.x : 8, py = me ? me.y : 8;
+  const angle = me ? me.angle : 0;
+
+  ctx.fillStyle = '#0a0a18';
+  ctx.fillRect(0, 0, W, HALF_H);
+  ctx.fillStyle = '#111108';
+  ctx.fillRect(0, HALF_H, W, HALF_H);
+
+  for (let x = 0; x < RAYS; x++) {
+    const rayAngle = angle - FOV / 2 + (x / RAYS) * FOV;
+    const { dist, side, wallX } = castRay(px, py, rayAngle, MAP);
+    const corrected = dist * Math.cos(rayAngle - angle);
+    const wallH = Math.min(H, H / corrected);
+    const top = HALF_H - wallH / 2;
+
+    const bright = Math.max(0, 1 - corrected / MAX_DIST);
+    const dark = side === 1 ? 0.6 : 1.0;
+    const r = Math.floor(80 * bright * dark);
+    const g = Math.floor(60 * bright * dark);
+    const b = Math.floor(120 * bright * dark);
+
+    const stripe = Math.floor((wallX * 8) % 2);
+    const tr = r + (stripe ? 15 : 0);
+    const tg = g + (stripe ? 10 : 0);
+    const tb = b + (stripe ? 25 : 0);
+
+    ctx.fillStyle = `rgb(${Math.min(255,tr)},${Math.min(255,tg)},${Math.min(255,tb)})`;
+    ctx.fillRect(x, top, 1, wallH);
+
+    const floorBright = 0.18;
+    for (let y = top + wallH; y < H; y++) {
+      const d = H / (2 * y - H) || 0.001;
+      const t = Math.max(0, 1 - d / 6);
+      const fr = Math.floor(30 * t), fg = Math.floor(28 * t), fb = Math.floor(20 * t);
+      ctx.fillStyle = `rgb(${fr},${fg},${fb})`;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+}
+
+function renderSprites(me) {
+  if (!gameState || !me) return;
+  const others = gameState.players.filter(p => p.id !== myId && p.alive);
+  const sprites = others.map(p => {
+    const dx = p.x - me.x, dy = p.y - me.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    let spriteAngle = Math.atan2(dy, dx) - me.angle;
+    while (spriteAngle < -Math.PI) spriteAngle += Math.PI*2;
+    while (spriteAngle > Math.PI) spriteAngle -= Math.PI*2;
+    return { p, dist, spriteAngle };
+  }).filter(s => Math.abs(s.spriteAngle) < FOV && s.dist > 0.3)
+    .sort((a,b) => b.dist - a.dist);
+
+  for (const { p, dist, spriteAngle } of sprites) {
+    const screenX = (0.5 + spriteAngle / FOV) * W;
+    const spriteH = Math.min(H * 1.2, H / dist);
+    const spriteW = spriteH * 0.6;
+    const top = HALF_H - spriteH / 2;
+    const left = screenX - spriteW / 2;
+    const bright = Math.max(0.15, 1 - dist / MAX_DIST);
+
+    ctx.save();
+    ctx.globalAlpha = bright;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.ellipse(screenX, top + spriteH * 0.25, spriteW * 0.25, spriteH * 0.25, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillRect(left + spriteW*0.2, top + spriteH*0.45, spriteW*0.6, spriteH*0.5);
+    ctx.fillStyle = '#00000066';
+    ctx.fillRect(left, top + spriteH*0.45, spriteW*0.2, spriteH*0.5);
+    ctx.fillRect(left+spriteW*0.8, top + spriteH*0.45, spriteW*0.2, spriteH*0.5);
+
+    if (dist < 8) {
+      ctx.fillStyle = '#fff';
+      ctx.font = `${Math.floor(14/dist*2)}px Courier New`;
+      ctx.textAlign = 'center';
+      ctx.fillText(p.name, screenX, top - 4);
+      const bw = spriteW;
+      ctx.fillStyle = '#ff000055';
+      ctx.fillRect(screenX-bw/2, top-18, bw, 5);
+      ctx.fillStyle = '#44ff88';
+      ctx.fillRect(screenX-bw/2, top-18, bw*(p.hp/100), 5);
+    }
+    ctx.restore();
+  }
+}
+
+function renderGun() {
+  const t = Date.now() * 0.003;
+  const bob = Math.sin(t) * (Object.values(keys).some(Boolean) ? 4 : 1);
+  const gx = W/2 + 80, gy = H - 120 + bob;
+  const flash = shootCooldown > 15;
+
+  ctx.save();
+  ctx.fillStyle = flash ? '#ffffaa' : '#667788';
+  ctx.fillRect(gx - 6, gy, 12, 70);
+  ctx.fillStyle = flash ? '#ffffff' : '#445566';
+  ctx.fillRect(gx - 10, gy + 20, 20, 50);
+  ctx.fillStyle = '#334455';
+  ctx.fillRect(gx - 14, gy + 40, 28, 30);
+  if (flash) {
+    ctx.fillStyle = '#ffff0088';
+    ctx.beginPath();
+    ctx.arc(gx, gy - 10, 20, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawMinimap(me) {
+  if (!MAP || !me) return;
+  mctx.fillStyle = '#000000cc';
+  mctx.fillRect(0, 0, MW, MH);
+  const cellW = MW / MAP[0].length, cellH = MH / MAP.length;
+  for (let y = 0; y < MAP.length; y++) {
+    for (let x = 0; x < MAP[0].length; x++) {
+      if (MAP[y][x] === 1) {
+        mctx.fillStyle = '#334455';
+        mctx.fillRect(x*cellW+0.5, y*cellH+0.5, cellW-1, cellH-1);
+      }
+    }
+  }
+  if (gameState) {
+    for (const p of gameState.players) {
+      const mx2 = p.x * cellW, my2 = p.y * cellH;
+      mctx.fillStyle = p.id === myId ? '#fff' : p.color;
+      mctx.beginPath();
+      mctx.arc(mx2, my2, p.id===myId?4:3, 0, Math.PI*2);
+      mctx.fill();
+      if (p.id === myId) {
+        mctx.strokeStyle = '#ffffff88';
+        mctx.lineWidth = 1;
+        mctx.beginPath();
+        mctx.moveTo(mx2, my2);
+        mctx.lineTo(mx2 + Math.cos(p.angle)*10, my2 + Math.sin(p.angle)*10);
+        mctx.stroke();
+      }
+    }
+  }
+  mctx.strokeStyle = '#ffffff22';
+  mctx.strokeRect(0,0,MW,MH);
+}
+
+function updateHUD(me) {
+  if (!me) return;
+  const hp = me.hp;
+  document.getElementById('health-fill').style.width = hp + '%';
+  document.getElementById('health-fill').style.background = hp>60?'#44ff88':hp>30?'#ffcc44':'#ff4444';
+  document.getElementById('kills-val').textContent = me.kills;
+  document.getElementById('deaths-val').textContent = me.deaths;
+  if (!me.alive) {
+    const secs = Math.ceil(me.respawnTimer / 60);
+    document.getElementById('respawn-msg').style.display = 'block';
+    document.getElementById('respawn-msg').innerHTML = `YOU DIED<br><span style="font-size:14px;color:#ff668899">Respawning in ${secs}s...</span>`;
+  } else {
+    document.getElementById('respawn-msg').style.display = 'none';
+  }
+}
+
+function updateScoreboard() {
+  if (!gameState) return;
+  const sorted = [...gameState.players].sort((a,b)=>b.kills-a.kills);
+  let html = '<tr><td>PLAYER</td><td>K</td><td>D</td></tr>';
+  for (const p of sorted) {
+    const you = p.id===myId?' (you)':'';
+    html += `<tr><td style="color:${p.color}">${p.name}${you}</td><td>${p.kills}</td><td>${p.deaths}</td></tr>`;
+  }
+  document.getElementById('score-table').innerHTML = html;
+}
+
+function addKillFeed(msg) {
+  const feed = document.getElementById('kill-feed');
+  const el = document.createElement('div');
+  el.className = 'kill-msg';
+  el.textContent = msg;
+  feed.appendChild(el);
+  setTimeout(() => el.remove(), 3100);
+}
+
+function flashHit() {
+  const f = document.getElementById('hit-flash');
+  f.style.background = '#ff000055';
+  setTimeout(()=>f.style.background='#ff000000', 120);
+}
+
+function restartGame() { socket.emit('restart'); }
+
+let lastInputTime = 0;
+function inputLoop() {
+  if (!socket || !myId || !gameState) { requestAnimationFrame(inputLoop); return; }
+  const me = gameState.players.find(p => p.id === myId);
+  if (!me || !me.alive) { requestAnimationFrame(inputLoop); return; }
+
+  let fwd = 0, strafe = 0, rot = 0;
+  if (keys['KeyW'] || keys['ArrowUp'])    fwd    =  1;
+  if (keys['KeyS'] || keys['ArrowDown'])  fwd    = -1;
+  if (keys['KeyA'])                        strafe = -1;
+  if (keys['KeyD'])                        strafe =  1;
+  if (keys['ArrowLeft'])                   rot    = -1;
+  if (keys['ArrowRight'])                  rot    =  1;
+
+  myAngle = me.angle;
+
+  const now = Date.now();
+  if (now - lastInputTime > 14) {
+    socket.emit('input', { fwd, strafe, rot, shooting: shooting && shootCooldown <= 0 });
+    if (shooting && shootCooldown <= 0) shootCooldown = 20;
+    lastInputTime = now;
+  }
+  if (shootCooldown > 0) shootCooldown--;
+  requestAnimationFrame(inputLoop);
+}
+
+function renderLoop() {
+  requestAnimationFrame(renderLoop);
+  const me = gameState ? gameState.players.find(p => p.id === myId) : null;
+  renderScene(me);
+  renderSprites(me);
+  renderGun();
+  drawMinimap(me);
+  updateHUD(me);
+}
+
+socket = io();
+
+socket.on('init', ({ playerId, slot, roomId, map, playerCount, maxKills: mk }) => {
+  myId = playerId; mySlot = slot; MAP = map; maxKills = mk;
+  document.getElementById('room-info').textContent = `ROOM ${roomId} · FIRST TO ${mk} KILLS`;
+  const ov = document.getElementById('overlay');
+  const ovMsg = document.getElementById('ov-msg');
+  ovMsg.innerHTML = `You are <span style="color:${['#66aaff','#ff6688','#66ffaa','#ffcc44'][slot%4]}">Player ${slot+1}</span><br>Room: <strong style="color:#cc99ff">${roomId}</strong><br>Waiting for opponent...`;
+  if (playerCount >= 2) { ov.style.display='none'; }
+});
+
+socket.on('playerCount', count => {
+  if (count >= 2) document.getElementById('overlay').style.display='none';
+  else {
+    document.getElementById('overlay').style.display='flex';
+    document.getElementById('ov-msg').innerHTML = `Waiting for another player...<br><span style="font-size:10px;color:#444">Share this page URL with a friend</span>`;
+  }
+});
+
+socket.on('state', state => { gameState = state; });
+
+socket.on('hit', ({ victimId, hp }) => {
+  if (victimId === myId) { flashHit(); myHp = hp; }
+});
+
+socket.on('kill', ({ killer, victim, killerSlot }) => {
+  const colors = ['#66aaff','#ff6688','#66ffaa','#ffcc44'];
+  addKillFeed(`${killer} fragged ${victim}`);
+});
+
+socket.on('gameOver', ({ winnerId, winnerName, winnerSlot }) => {
+  const colors = ['#66aaff','#ff6688','#66ffaa','#ffcc44'];
+  const color = colors[winnerSlot % 4];
+  const ov = document.getElementById('overlay');
+  ov.innerHTML = `
+    <h1 style="color:${color}">${winnerName} Wins!</h1>
+    <p style="color:#886699">First to ${maxKills} kills<br>${winnerId===myId?'🏆 That\'s you!':''}</p>
+    <button onclick="restartGame()">Play Again</button>
+  `;
+  ov.style.display='flex';
+});
+
+socket.on('restarted', () => {
+  gameState = null;
+  document.getElementById('overlay').style.display='none';
+});
+
+socket.on('playerLeft', id => {
+  addKillFeed('A player disconnected');
+});
+
+socket.on('disconnect', () => {
+  document.getElementById('overlay').innerHTML = `<h1 style="color:#ff6688">Disconnected</h1><p>Lost connection to server.</p><button onclick="location.reload()">Reconnect</button>`;
+  document.getElementById('overlay').style.display='flex';
+});
+
+inputLoop();
+renderLoop();
+</script>
+</body>
+</html>
